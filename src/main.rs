@@ -373,12 +373,14 @@ fn run_daemon(assets: &assets::Assets, lang: &str) -> Result<()> {
                     Some(s) => {
                         log::info!("dictation stopped");
                         s.stop.store(true, Ordering::SeqCst);
-                        let _ = s.handle.join();
+                        // Grey the icon before waiting on the final flush so
+                        // the stop is visible immediately.
                         if let Some(status) = &status {
                             if let Err(e) = status.set_recording(false) {
                                 log::warn!("failed to update status icon: {e}");
                             }
                         }
+                        join_with_pump(s.handle);
                     }
                 }
             }
@@ -393,6 +395,20 @@ fn run_daemon(assets: &assets::Assets, lang: &str) -> Result<()> {
 struct DictationSession {
     stop: Arc<AtomicBool>,
     handle: thread::JoinHandle<()>,
+}
+
+/// Wait for the dictation thread to finish its final flush while keeping the
+/// AppKit run loop serviced, so the menu-bar icon stays responsive and the
+/// grey state actually renders.
+fn join_with_pump(handle: thread::JoinHandle<()>) {
+    loop {
+        if handle.is_finished() {
+            let _ = handle.join();
+            return;
+        }
+        status::pump_event_loop();
+        thread::sleep(Duration::from_millis(20));
+    }
 }
 
 /// Continuous dictation: keep the mic live and, whenever the user pauses
@@ -492,8 +508,10 @@ fn spawn_hotkey_listener(tx: Sender<AppEvent>) {
                         _ => last_option_press = Some(now),
                     }
                 }
-                // Any other key press in between breaks a potential double-tap.
-                EventType::KeyPress(_) => last_option_press = None,
+                // Deliberately ignore all other keys. Synthetic paste
+                // keystrokes (Cmd+V sent by enigo while dictating) arrive as
+                // Meta/V key presses and would otherwise break a double-tap
+                // that is already in progress.
                 _ => {}
             }
         };
