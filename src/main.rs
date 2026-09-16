@@ -115,11 +115,7 @@ fn run() -> Result<()> {
 
 /// Kill the resident whisper-server (and free its memory).
 fn stop_server() {
-    match std::process::Command::new("pkill").arg("-f").arg("whisper-server").status() {
-        Ok(status) if status.success() => log::info!("stopped whisper-server"),
-        Ok(_) => log::info!("no running whisper-server found"),
-        Err(e) => log::warn!("failed to stop server: {e}"),
-    }
+    transcribe::kill_server();
 }
 
 fn parse_args() -> Result<Cli> {
@@ -391,7 +387,7 @@ fn dictation_loop(
 
     // Analysis windows (in samples).
     let window = (rate as usize * 100 / 1000).max(1); // 100 ms
-    let silence_samples = rate as usize * 700 / 1000; // 700 ms
+    let silence_samples = rate as usize * 450 / 1000; // 450 ms
     let min_phrase_samples = rate as usize * 300 / 1000; // 300 ms
     let tail_pad = rate as usize * 120 / 1000; // 120 ms of trailing audio
 

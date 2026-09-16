@@ -103,12 +103,13 @@ bare Option press leaks nothing.
 
 | Model | Size | Notes |
 |-------|------|-------|
-| `large-v3-turbo` *(default)* | 1.5 GB | Best speed/accuracy for dictation; multilingual |
-| `large-v3-turbo-q5_0` | 547 MB | Quantized, smaller/faster, near-identical quality |
+| `large-v3-turbo` *(default)* | 1.5 GB | Best accuracy for dictation; multilingual |
+| `small` | 466 MB | ~4× faster, slightly lower accuracy (good for speed) |
 | `medium` | 1.5 GB | Good multilingual accuracy |
-| `small` | 466 MB | Fast, lower accuracy |
+| `large-v3-turbo-q5_0` | 547 MB | Quantized; smaller/faster load, similar quality |
 
-Choose with `--model <name>` or `VOICE_PASTE_MODEL`.
+Choose with `--model <name>` or `VOICE_PASTE_MODEL`. Use `small` if you want
+noticeably faster (near-instant) transcription at a small accuracy cost.
 
 ## Configuration
 
@@ -120,6 +121,7 @@ Choose with `--model <name>` or `VOICE_PASTE_MODEL`.
 | `VOICE_PASTE_LANG` | `auto` | Default language (`en`, `pl`, `auto`, …) |
 | `VOICE_PASTE_MODEL` | `large-v3-turbo` | Default model |
 | `VOICE_PASTE_PORT` | `8080` | Port for the local server |
+| `VOICE_PASTE_AUDIO_CTX` | `0` (full) | Encoder context cap in tokens. Smaller = faster, but whisper.cpp re-seeks on longer clips and can duplicate text — experimental |
 
 ## Platform notes
 
