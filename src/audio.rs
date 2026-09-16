@@ -11,6 +11,14 @@ pub struct Recording {
     pub sample_rate: u32,
 }
 
+impl Recording {
+    /// Snapshot all samples captured so far, without stopping the stream. Used
+    /// by continuous dictation to poll the mic while it is still recording.
+    pub fn snapshot(&self) -> Vec<f32> {
+        self.samples.lock().unwrap().clone()
+    }
+}
+
 /// Start capturing from the default input device.
 pub fn start_recording() -> Result<Recording> {
     let host = cpal::default_host();
@@ -102,4 +110,70 @@ pub fn write_wav(samples: &[f32], sample_rate: u32, path: &std::path::Path) -> R
     }
     writer.finalize()?;
     Ok(())
+}
+
+/// Root-mean-square amplitude of a mono sample slice (in -1..1).
+pub fn rms(samples: &[f32]) -> f32 {
+    if samples.is_empty() {
+        return 0.0;
+    }
+    (samples.iter().map(|x| x * x).sum::<f32>() / samples.len() as f32).sqrt()
+}
+
+/// Simple streaming energy-based voice-activity detector. Tracks the noise
+/// floor and classifies a frame's RMS level as speech or silence.
+pub struct Vad {
+    noise_floor: f32,
+}
+
+impl Vad {
+    pub fn new() -> Self {
+        Vad { noise_floor: 0.003 }
+    }
+
+    /// Classify a frame by its RMS level; adapts the noise floor on quiet
+    /// frames so it tracks the current environment.
+    pub fn classify(&mut self, level: f32) -> bool {
+        let threshold = (self.noise_floor * 4.0).max(0.008);
+        if level > threshold {
+            true
+        } else {
+            if level < self.noise_floor * 3.0 {
+                self.noise_floor = 0.9 * self.noise_floor + 0.1 * level;
+            }
+            false
+        }
+    }
+}
+
+impl Default for Vad {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{rms, Vad};
+
+    #[test]
+    fn vad_distinguishes_speech_from_silence() {
+        let mut vad = Vad::new();
+        // Seed the noise floor with quiet frames.
+        for _ in 0..20 {
+            assert!(!vad.classify(0.001));
+        }
+        // A loud frame is speech.
+        assert!(vad.classify(0.1));
+        // And silence again is not.
+        assert!(!vad.classify(0.001));
+    }
+
+    #[test]
+    fn rms_scales_with_amplitude() {
+        let quiet = vec![0.01; 100];
+        let loud = vec![0.5; 100];
+        assert!(rms(&loud) > rms(&quiet));
+        assert!((rms(&quiet) - 0.01).abs() < 1e-4);
+    }
 }

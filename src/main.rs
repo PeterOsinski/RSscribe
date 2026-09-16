@@ -6,17 +6,18 @@ mod transcribe;
 
 use anyhow::{bail, Result};
 use rdev::{listen, Event, EventType, Key};
-use std::collections::HashSet;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{channel, Sender};
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use std::thread;
+use std::time::{Duration, Instant};
 
 const USAGE: &str = "\
 voice-paste — record audio, transcribe locally with Whisper, and (optionally) paste it.
 
 USAGE:
-    voice-paste                 Run in the background and toggle recording with a hotkey
+    voice-paste                 Run in the background and dictate continuously with a hotkey
     voice-paste record          Record from the microphone, transcribe, and print the text
     voice-paste transcribe <FILE>...  Transcribe one or more existing audio files
     voice-paste setup           Download the Whisper model and exit
@@ -38,8 +39,9 @@ ENV:
     VOICE_PASTE_MODEL           Default model (default: large-v3-turbo)
     VOICE_PASTE_PORT            Port for the local server (default: 8080)
 
-Hotkey (daemon mode): Option+Space. First press starts recording, second press
-stops, transcribes, and pastes.
+Hotkey (daemon mode): double-tap Option. First double-tap starts dictation —
+speak naturally and each phrase is transcribed and pasted as you pause. Second
+double-tap stops dictation.
 ";
 
 struct Cli {
@@ -308,11 +310,14 @@ fn is_native_audio(path: &Path) -> bool {
 // Daemon: background hotkey loop
 // ---------------------------------------------------------------------------
 
-// Option+Space (macOS Option maps to rdev's Alt key).
-fn is_trigger_combo(held: &HashSet<Key>) -> bool {
-    let alt = held.contains(&Key::Alt) || held.contains(&Key::AltGr);
-    let space = held.contains(&Key::Space);
-    alt && space
+/// Two presses of the Option key within this window toggle dictation. We use a
+/// double-tap (rather than a chord with Space) because `rdev` observes keys but
+/// cannot swallow them — a bare Option press leaks nothing into the focused
+/// app, whereas Option+Space would insert a non-breaking space.
+const DOUBLE_TAP_WINDOW: Duration = Duration::from_millis(400);
+
+fn is_option_key(key: &Key) -> bool {
+    matches!(key, Key::Alt | Key::AltGr)
 }
 
 enum AppEvent {
@@ -325,47 +330,39 @@ fn run_daemon(assets: &assets::Assets, lang: &str) -> Result<()> {
         &assets.model_path,
         transcribe::default_port(),
     )?;
-    log::info!("ready — press the hotkey to toggle recording");
+    log::info!("ready — double-tap Option to start/stop dictation");
 
+    let server = Arc::new(server);
     let lang = lang.to_string();
-    let recording_state: Arc<Mutex<Option<audio::Recording>>> = Arc::new(Mutex::new(None));
 
     let (tx, rx) = channel::<AppEvent>();
     spawn_hotkey_listener(tx);
+
+    let mut session: Option<DictationSession> = None;
 
     for event in rx {
         if !matches!(event, AppEvent::HotkeyPressed) {
             continue;
         }
-        let mut state = recording_state.lock().unwrap();
-        if state.is_none() {
-            log::info!("recording started");
-            match audio::start_recording() {
-                Ok(rec) => *state = Some(rec),
-                Err(e) => log::error!("failed to start recording: {e}"),
-            }
-        } else {
-            log::info!("recording stopped, transcribing...");
-            let rec = state.take().unwrap();
-            drop(state);
 
-            let (samples, rate) = match audio::stop_recording(rec) {
-                Ok(s) => s,
-                Err(e) => {
-                    log::error!("failed to stop recording: {e}");
-                    continue;
-                }
-            };
-
-            match transcribe_samples(&server, &samples, rate, &lang) {
-                Ok(text) if !text.trim().is_empty() => {
-                    log::info!("transcript: {text}");
-                    if let Err(e) = paste::paste_text(&text) {
-                        log::error!("failed to paste: {e}");
+        match session.take() {
+            None => {
+                log::info!("dictation started — speak; press the hotkey again to stop");
+                let stop = Arc::new(AtomicBool::new(false));
+                let stop_flag = stop.clone();
+                let server = server.clone();
+                let lang = lang.clone();
+                let handle = thread::spawn(move || {
+                    if let Err(e) = dictation_loop(&server, &lang, &stop_flag) {
+                        log::error!("dictation failed: {e}");
                     }
-                }
-                Ok(_) => log::warn!("empty transcript, nothing to paste"),
-                Err(e) => log::error!("transcription failed: {e}"),
+                });
+                session = Some(DictationSession { stop, handle });
+            }
+            Some(s) => {
+                log::info!("dictation stopped");
+                s.stop.store(true, Ordering::SeqCst);
+                let _ = s.handle.join();
             }
         }
     }
@@ -373,31 +370,110 @@ fn run_daemon(assets: &assets::Assets, lang: &str) -> Result<()> {
     Ok(())
 }
 
+struct DictationSession {
+    stop: Arc<AtomicBool>,
+    handle: thread::JoinHandle<()>,
+}
+
+/// Continuous dictation: keep the mic live and, whenever the user pauses
+/// (~700 ms of silence), transcribe the phrase they just spoke and paste it
+/// into the focused field. Runs until `stop` is set.
+fn dictation_loop(
+    server: &transcribe::ServerClient,
+    lang: &str,
+    stop: &AtomicBool,
+) -> Result<()> {
+    let rec = audio::start_recording()?;
+    let rate = rec.sample_rate;
+
+    let mut paster = paste::Paster::new()?;
+    let mut vad = audio::Vad::new();
+
+    // Analysis windows (in samples).
+    let window = (rate as usize * 100 / 1000).max(1); // 100 ms
+    let silence_samples = rate as usize * 700 / 1000; // 700 ms
+    let min_phrase_samples = rate as usize * 300 / 1000; // 300 ms
+    let tail_pad = rate as usize * 120 / 1000; // 120 ms of trailing audio
+
+    // Brief pause at the start so the noise floor can settle before speech.
+    thread::sleep(Duration::from_millis(400));
+
+    let mut phrase_start = 0usize;
+    let mut last_voiced = 0usize;
+
+    while !stop.load(Ordering::SeqCst) {
+        thread::sleep(Duration::from_millis(150));
+
+        let samples = rec.snapshot();
+        if samples.len() < window {
+            continue;
+        }
+
+        let level = audio::rms(&samples[samples.len() - window..]);
+        if vad.classify(level) {
+            last_voiced = samples.len();
+        }
+
+        let phrase_len = last_voiced.saturating_sub(phrase_start);
+        let silence_len = samples.len().saturating_sub(last_voiced);
+
+        if phrase_len >= min_phrase_samples && silence_len >= silence_samples {
+            let end = (last_voiced + tail_pad).min(samples.len());
+            let seg = samples[phrase_start..end].to_vec();
+            transcribe_and_paste(server, &mut paster, &seg, rate, lang)?;
+            phrase_start = last_voiced;
+        }
+    }
+
+    // Flush any trailing speech that wasn't followed by a long enough pause.
+    let samples = rec.snapshot();
+    if samples.len().saturating_sub(phrase_start) >= min_phrase_samples {
+        let seg = samples[phrase_start..].to_vec();
+        transcribe_and_paste(server, &mut paster, &seg, rate, lang)?;
+    }
+
+    Ok(())
+}
+
+fn transcribe_and_paste(
+    server: &transcribe::ServerClient,
+    paster: &mut paste::Paster,
+    samples: &[f32],
+    sample_rate: u32,
+    lang: &str,
+) -> Result<()> {
+    let wav_path = std::env::temp_dir().join("voice-paste-segment.wav");
+    audio::write_wav(samples, sample_rate, &wav_path)?;
+    let text = server.transcribe(&wav_path, lang);
+    let _ = std::fs::remove_file(&wav_path);
+
+    let text = text?;
+    if text.trim().is_empty() {
+        return Ok(());
+    }
+
+    log::info!("… {text}");
+    paster.paste(&text)
+}
+
 fn spawn_hotkey_listener(tx: Sender<AppEvent>) {
     thread::spawn(move || {
-        let held: Arc<Mutex<HashSet<Key>>> = Arc::new(Mutex::new(HashSet::new()));
-        let already_fired = Arc::new(Mutex::new(false));
-
-        let held_cb = held.clone();
-        let fired_cb = already_fired.clone();
+        let mut last_option_press: Option<Instant> = None;
 
         let callback = move |event: Event| {
-            let mut held = held_cb.lock().unwrap();
             match event.event_type {
-                EventType::KeyPress(key) => {
-                    held.insert(key);
-                    let mut fired = fired_cb.lock().unwrap();
-                    if !*fired && is_trigger_combo(&held) {
-                        *fired = true;
-                        let _ = tx.send(AppEvent::HotkeyPressed);
+                EventType::KeyPress(key) if is_option_key(&key) => {
+                    let now = Instant::now();
+                    match last_option_press {
+                        Some(t) if now.duration_since(t) <= DOUBLE_TAP_WINDOW => {
+                            last_option_press = None;
+                            let _ = tx.send(AppEvent::HotkeyPressed);
+                        }
+                        _ => last_option_press = Some(now),
                     }
                 }
-                EventType::KeyRelease(key) => {
-                    held.remove(&key);
-                    if !is_trigger_combo(&held) {
-                        *fired_cb.lock().unwrap() = false;
-                    }
-                }
+                // Any other key press in between breaks a potential double-tap.
+                EventType::KeyPress(_) => last_option_press = None,
                 _ => {}
             }
         };

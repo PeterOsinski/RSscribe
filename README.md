@@ -7,8 +7,9 @@ result into whatever is focused.
 It runs two ways:
 
 1. **CLI** — `voice-paste record` records from the mic and prints the transcript.
-2. **Background daemon** — a global hotkey toggles recording and pastes the
-   transcript into the focused input.
+2. **Background daemon** — a global hotkey starts continuous dictation: speak
+   naturally and each phrase is transcribed and pasted into the focused input
+   as you pause.
 
 The Whisper model is downloaded automatically on first use. It is multilingual,
 so English and Polish (and ~97 other languages) work out of the box with
@@ -75,7 +76,7 @@ cargo build --release
 # stop the resident server and free its memory
 ./target/release/voice-paste stop
 
-# run in the background and toggle recording with a hotkey
+# run in the background and dictate continuously with a hotkey
 ./target/release/voice-paste
 ```
 
@@ -88,8 +89,15 @@ so subsequent runs are fast. Stop it with `voice-paste stop` (or
 
 ## Hotkey (daemon mode)
 
-Default is **Option+Space**. First press starts recording, second press stops,
-transcribes, and pastes. Change it in `is_trigger_combo` in `src/main.rs`.
+Default is a **double-tap of Option**. First double-tap starts dictation —
+speak naturally and each phrase is transcribed and pasted as you pause (~0.7 s
+of silence). Second double-tap stops dictation. Change the key in
+`spawn_hotkey_listener` in `src/main.rs`.
+
+We use a double-tap rather than a chord like Option+Space because `rdev` only
+*observes* global keys — it cannot swallow them, so a chord would leak its
+keystroke into the focused app (Option+Space types a non-breaking space). A
+bare Option press leaks nothing.
 
 ## Models
 
