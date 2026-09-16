@@ -1,147 +1,124 @@
-# voice-paste
+# RSscribe
 
-Record audio, transcribe it locally with
-[Whisper](https://github.com/ggml-org/whisper.cpp), and optionally paste the
-result into whatever is focused.
+**Speak and it types.** Local, private, offline voice dictation for macOS.
 
-It runs two ways:
+RSscribe (as in *Rust Scribe*) records your microphone, transcribes the audio
+**on your own machine** with [Whisper](https://github.com/ggml-org/whisper.cpp),
+and pastes the text into whatever you're looking at. No cloud, no API keys, no
+subscription. It understands ~99 languages and auto-detects yours.
 
-1. **CLI** — `voice-paste record` records from the mic and prints the transcript.
-2. **Background daemon** — a global hotkey starts continuous dictation: speak
-   naturally and each phrase is transcribed and pasted into the focused input
-   as you pause.
+The command-line binary is named `voice-paste`.
 
-The Whisper model is downloaded automatically on first use. It is multilingual,
-so English and Polish (and ~97 other languages) work out of the box with
-auto-detection.
+```
+double-tap Option  →  mic capture (VAD)  →  whisper-server (Metal)  →  paste
+```
 
-## How it works
+## Highlights
 
-Transcription is handled by `whisper-server` from
-[whisper.cpp](https://github.com/ggml-org/whisper.cpp), run as a local HTTP
-server. It is started on first use and kept **resident** — the model is loaded
-once and reused, so warm transcriptions take ~1–2 s instead of reloading the
-model every time. On Apple Silicon it uses the GPU (Metal) automatically.
+- **Fully local** — transcription runs through `whisper-server` (whisper.cpp) on
+  your GPU (Metal on Apple Silicon). Nothing leaves your machine.
+- **Dictate anywhere** — a menu-bar dot (grey = idle, red = listening) and a
+  double-tap of Option toggles continuous dictation into the focused field.
+- **Talk naturally** — a voice-activity detector splits your speech on pauses
+  and pastes phrase-by-phrase, so you just keep talking.
+- **Also a CLI** — record a clip, or transcribe existing audio files
+  (WAV/MP3/FLAC/OGG/OPUS natively, M4A/AAC via ffmpeg).
+- **Pick your model** — from `tiny` to `large-v3-turbo`, quantized or full, to
+  trade speed against accuracy.
 
-## Requirements
+## Install
 
-- **Rust** (stable) — `cargo build --release`
-- **whisper.cpp** installed, which provides the `whisper-server` binary:
-
-  ```bash
-  brew install whisper.cpp
-  ```
-
-  (Or build whisper.cpp from source and put `whisper-server` on your `PATH`, or
-  point `VOICE_PASTE_BIN_DIR` at a directory containing it.)
-- **ffmpeg** (only needed to transcribe non-native formats like `.m4a`/AAC via
-  `voice-paste transcribe file.m4a`; mic recording writes WAV and needs no
-  ffmpeg): `brew install ffmpeg`
-- **macOS 14+ Apple Silicon** (or Linux) — `whisper-server` runs anywhere, but
-  this app's paste/hotkey paths are best supported on macOS.
-
-No API keys or tokens are required. The model is downloaded from the public
-[`ggerganov/whisper.cpp`](https://huggingface.co/ggerganov/whisper.cpp)
-HuggingFace repo.
-
-## Build
+Prerequisites: **macOS 14+ on Apple Silicon** (primary target) and
+[Homebrew](https://brew.sh). Linux works for the CLI/transcription; the hotkey
+and paste paths are macOS-first.
 
 ```bash
+# 1. Install Rust (skip if you already have it)
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+
+# 2. Install whisper.cpp (provides whisper-server) and ffmpeg
+brew install whisper.cpp ffmpeg
+
+# 3. Build
 cargo build --release
+
+# 4. (optional) put the binary on your PATH
+cp target/release/voice-paste /opt/homebrew/bin/
 ```
 
-## Usage
+That's it. The Whisper model (~1.5 GB for the default `large-v3-turbo`)
+downloads automatically on first use and is cached under
+`~/Library/Caches/voice-paste/`.
+
+### macOS permissions
+
+On first run, grant the permissions macOS asks for in
+**System Settings → Privacy & Security**:
+
+- **Microphone** — to capture audio.
+- **Accessibility** — to simulate the paste keystroke.
+- **Input Monitoring** — to see the global Option hotkey (daemon mode only).
+
+## Run it
 
 ```bash
-# record from the microphone, print the transcript (auto-detects language)
-./target/release/voice-paste record
-
-# record and paste into the focused app
-./target/release/voice-paste record --paste
-
-# transcribe an existing audio file (WAV/MP3/FLAC/OGG/OPUS natively;
-# m4a/AAC converted via ffmpeg)
-./target/release/voice-paste transcribe interview.m4a
-
-# force a language (instead of auto-detect)
-./target/release/voice-paste record --lang en
-./target/release/voice-paste record --lang pl
-
-# use a different Whisper model (default: large-v3-turbo)
-./target/release/voice-paste record --model medium
-
-# just download the model and exit
-./target/release/voice-paste setup
-
-# stop the resident server and free its memory
-./target/release/voice-paste stop
-
-# run in the background and dictate continuously with a hotkey
-./target/release/voice-paste
+voice-paste                     # daemon: double-tap Option to dictate continuously
+voice-paste record              # record once, print the transcript
+voice-paste record --paste      # record once and paste into the focused app
+voice-paste transcribe interview.m4a   # transcribe one or more audio files
+voice-paste setup               # download the model and exit
+voice-paste stop                # stop the resident server and free its memory
 ```
 
-On first run the app downloads the Whisper model (~1.5 GB for the default
-`large-v3-turbo`) into the cache directory (see below). This happens once.
+Useful flags: `--lang en|pl|auto`, `--model <name>`, `--model-dir <path>`,
+`--bin-dir <path>`, `--paste`.
 
-The transcription server is started automatically on first use and left running
-so subsequent runs are fast. Stop it with `voice-paste stop` (or
-`pkill whisper-server`) when you want the memory back.
+### Daemon mode (the main event)
 
-## Hotkey (daemon mode)
+Run `voice-paste` and a dot appears in the macOS menu bar. **Double-tap Option**
+to start dictating — speak naturally and each phrase is pasted into the focused
+input as you pause (~0.7 s of silence). Double-tap Option again to stop. The dot
+turns grey (idle) ↔ red (recording) so you can see the state at a glance.
 
-Default is a **double-tap of Option**. First double-tap starts dictation —
-speak naturally and each phrase is transcribed and pasted as you pause (~0.7 s
-of silence). Second double-tap stops dictation. Change the key in
-`spawn_hotkey_listener` in `src/main.rs`.
-
-We use a double-tap rather than a chord like Option+Space because `rdev` only
-*observes* global keys — it cannot swallow them, so a chord would leak its
-keystroke into the focused app (Option+Space types a non-breaking space). A
-bare Option press leaks nothing.
-
-While the daemon runs, a small dot appears in the macOS menu bar: **grey** when
-idle, **red** while dictation is recording. Hover it for a tooltip.
+It uses a double-tap rather than a chord (e.g. Option+Space) because the hotkey
+layer *observes* global keys but can't swallow them: a bare Option press leaks
+nothing into your app, while Option+Space would type a non-breaking space.
 
 ## Models
 
 | Model | Size | Notes |
 |-------|------|-------|
-| `large-v3-turbo` *(default)* | 1.5 GB | Best accuracy for dictation; multilingual |
-| `small` | 466 MB | ~4× faster, slightly lower accuracy (good for speed) |
-| `medium` | 1.5 GB | Good multilingual accuracy |
-| `large-v3-turbo-q5_0` | 547 MB | Quantized; smaller/faster load, similar quality |
+| `large-v3-turbo` *(default)* | 1.5 GB | best accuracy for dictation; multilingual |
+| `large-v3-turbo-q5_0` | 547 MB | quantized; smaller/faster load, similar quality |
+| `medium` | 1.5 GB | good multilingual accuracy |
+| `small` | 466 MB | ~4× faster, near-instant, small accuracy cost |
+| `tiny` / `base` | 75–142 MB | fastest, lower accuracy |
 
-Choose with `--model <name>` or `VOICE_PASTE_MODEL`. Use `small` if you want
-noticeably faster (near-instant) transcription at a small accuracy cost.
+Choose with `--model <name>` or `VOICE_PASTE_MODEL`. More names are supported —
+`tiny`, `base`, `small`, `medium`, `large-v1/v2/v3`, plus `.en` and quantized
+(`-q5_0`/`-q8_0`) variants.
 
 ## Configuration
 
 | Env var | Default | Purpose |
 |---------|---------|---------|
-| `VOICE_PASTE_CACHE_DIR` | `~/Library/Caches/voice-paste` (macOS) / `~/.cache/voice-paste` (Linux) | Cache root |
-| `VOICE_PASTE_MODEL_DIR` | `<cache>/models/whisper` | Model directory |
-| `VOICE_PASTE_BIN_DIR` | *(auto-detected)* | Directory holding `whisper-server` |
-| `VOICE_PASTE_LANG` | `auto` | Default language (`en`, `pl`, `auto`, …) |
-| `VOICE_PASTE_MODEL` | `large-v3-turbo` | Default model |
-| `VOICE_PASTE_PORT` | `8080` | Port for the local server |
-| `VOICE_PASTE_AUDIO_CTX` | `0` (full) | Encoder context cap in tokens. Smaller = faster, but whisper.cpp re-seeks on longer clips and can duplicate text — experimental |
-
-## Platform notes
-
-- **macOS**: the daemon needs *Input Monitoring* (global key events),
-  *Accessibility* (simulated paste keystroke), and *Microphone* (capture)
-  permissions. The CLI `record` mode only needs *Microphone*.
-- **Linux**: `rdev` and `enigo` synthetic input are reliable on X11; Wayland
-  compositors vary.
+| `VOICE_PASTE_CACHE_DIR` | `~/Library/Caches/voice-paste` | cache root |
+| `VOICE_PASTE_MODEL_DIR` | `<cache>/models/whisper` | model directory |
+| `VOICE_PASTE_BIN_DIR` | auto-detected | directory containing `whisper-server` |
+| `VOICE_PASTE_LANG` | `auto` | default language (`en`, `pl`, `auto`, …) |
+| `VOICE_PASTE_MODEL` | `large-v3-turbo` | default model |
+| `VOICE_PASTE_PORT` | `8080` | local server port |
+| `VOICE_PASTE_AUDIO_CTX` | `0` | experimental: cap encoder context (smaller = faster, but can duplicate text) |
 
 ## Project layout
 
 ```
-src/main.rs      CLI parsing + daemon hotkey loop
-src/audio.rs     cpal mic capture → mono WAV
-src/transcribe.rs  resident whisper-server client + lifecycle
-src/paste.rs     clipboard set + simulated paste
-src/assets.rs    whisper-server discovery + model auto-download
-src/text.rs      transcript cleanup (whitespace + repetition normalization)
-src/status.rs    macOS menu-bar status dot (grey idle / red recording)
+src/main.rs       CLI parsing + daemon hotkey loop
+src/audio.rs      mic capture → mono WAV, VAD/RMS
+src/transcribe.rs resident whisper-server client + lifecycle
+src/paste.rs      clipboard set + simulated paste
+src/assets.rs     server discovery + model auto-download
+src/text.rs       transcript cleanup
+src/status.rs     macOS menu-bar status dot (grey idle / red recording)
+site/index.html   minimal landing page (no framework)
 ```
