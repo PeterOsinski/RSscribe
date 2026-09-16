@@ -38,8 +38,8 @@ ENV:
     VOICE_PASTE_MODEL           Default model (default: large-v3-turbo)
     VOICE_PASTE_PORT            Port for the local server (default: 8080)
 
-Hotkey (daemon mode): Ctrl+Alt+Space (Cmd+Alt+Space on macOS). First press starts
-recording, second press stops, transcribes, and pastes.
+Hotkey (daemon mode): Option+Space. First press starts recording, second press
+stops, transcribes, and pastes.
 ";
 
 struct Cli {
@@ -308,15 +308,11 @@ fn is_native_audio(path: &Path) -> bool {
 // Daemon: background hotkey loop
 // ---------------------------------------------------------------------------
 
-// Ctrl+Alt+Space (Cmd+Alt+Space on macOS, where Meta maps to Cmd).
+// Option+Space (macOS Option maps to rdev's Alt key).
 fn is_trigger_combo(held: &HashSet<Key>) -> bool {
-    let ctrl_or_cmd = held.contains(&Key::ControlLeft)
-        || held.contains(&Key::ControlRight)
-        || held.contains(&Key::MetaLeft)
-        || held.contains(&Key::MetaRight);
     let alt = held.contains(&Key::Alt) || held.contains(&Key::AltGr);
     let space = held.contains(&Key::Space);
-    ctrl_or_cmd && alt && space
+    alt && space
 }
 
 enum AppEvent {

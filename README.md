@@ -88,9 +88,8 @@ so subsequent runs are fast. Stop it with `voice-paste stop` (or
 
 ## Hotkey (daemon mode)
 
-Default is **Ctrl+Alt+Space** (Cmd+Alt+Space on macOS). First press starts
-recording, second press stops, transcribes, and pastes. Change it in
-`is_trigger_combo` in `src/main.rs`.
+Default is **Option+Space**. First press starts recording, second press stops,
+transcribes, and pastes. Change it in `is_trigger_combo` in `src/main.rs`.
 
 ## Models
 
