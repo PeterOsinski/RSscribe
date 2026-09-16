@@ -23,5 +23,13 @@ anyhow = "1"
 log = "0.4"
 env_logger = "0.11"
 
+# menu-bar status icon
+tray-icon = "0.25"
+
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2 = "0.6"
+objc2-app-kit = { version = "0.3", features = ["std", "NSApplication"] }
+objc2-foundation = { version = "0.3", default-features = false, features = ["std", "NSRunLoop", "NSDate", "NSString", "NSObjCRuntime"] }
+
 [profile.release]
 opt-level = 2

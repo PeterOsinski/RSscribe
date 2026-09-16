@@ -99,6 +99,9 @@ We use a double-tap rather than a chord like Option+Space because `rdev` only
 keystroke into the focused app (Option+Space types a non-breaking space). A
 bare Option press leaks nothing.
 
+While the daemon runs, a small dot appears in the macOS menu bar: **grey** when
+idle, **red** while dictation is recording. Hover it for a tooltip.
+
 ## Models
 
 | Model | Size | Notes |
@@ -140,4 +143,5 @@ src/transcribe.rs  resident whisper-server client + lifecycle
 src/paste.rs     clipboard set + simulated paste
 src/assets.rs    whisper-server discovery + model auto-download
 src/text.rs      transcript cleanup (whitespace + repetition normalization)
+src/status.rs    macOS menu-bar status dot (grey idle / red recording)
 ```

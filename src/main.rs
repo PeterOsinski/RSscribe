@@ -1,6 +1,7 @@
 mod assets;
 mod audio;
 mod paste;
+mod status;
 mod text;
 mod transcribe;
 
@@ -334,32 +335,55 @@ fn run_daemon(assets: &assets::Assets, lang: &str) -> Result<()> {
     let (tx, rx) = channel::<AppEvent>();
     spawn_hotkey_listener(tx);
 
+    // Menu-bar status dot (grey = idle, red = recording). Not critical: if the
+    // icon can't be created, keep running without it.
+    let status = status::StatusIcon::new()
+        .map_err(|e| log::warn!("status icon unavailable: {e}"))
+        .ok();
+
     let mut session: Option<DictationSession> = None;
 
-    for event in rx {
-        if !matches!(event, AppEvent::HotkeyPressed) {
-            continue;
-        }
+    loop {
+        // Keep the AppKit run loop serviced so the menu-bar status icon gets
+        // placed and redrawn (no-op off macOS). This runs instead of blocking
+        // on the hotkey channel indefinitely.
+        status::pump_event_loop();
 
-        match session.take() {
-            None => {
-                log::info!("dictation started — speak; press the hotkey again to stop");
-                let stop = Arc::new(AtomicBool::new(false));
-                let stop_flag = stop.clone();
-                let server = server.clone();
-                let lang = lang.clone();
-                let handle = thread::spawn(move || {
-                    if let Err(e) = dictation_loop(&server, &lang, &stop_flag) {
-                        log::error!("dictation failed: {e}");
+        match rx.try_recv() {
+            Ok(AppEvent::HotkeyPressed) => {
+                match session.take() {
+                    None => {
+                        if let Some(status) = &status {
+                            if let Err(e) = status.set_recording(true) {
+                                log::warn!("failed to update status icon: {e}");
+                            }
+                        }
+                        log::info!("dictation started — speak; press the hotkey again to stop");
+                        let stop = Arc::new(AtomicBool::new(false));
+                        let stop_flag = stop.clone();
+                        let server = server.clone();
+                        let lang = lang.clone();
+                        let handle = thread::spawn(move || {
+                            if let Err(e) = dictation_loop(&server, &lang, &stop_flag) {
+                                log::error!("dictation failed: {e}");
+                            }
+                        });
+                        session = Some(DictationSession { stop, handle });
                     }
-                });
-                session = Some(DictationSession { stop, handle });
+                    Some(s) => {
+                        log::info!("dictation stopped");
+                        s.stop.store(true, Ordering::SeqCst);
+                        let _ = s.handle.join();
+                        if let Some(status) = &status {
+                            if let Err(e) = status.set_recording(false) {
+                                log::warn!("failed to update status icon: {e}");
+                            }
+                        }
+                    }
+                }
             }
-            Some(s) => {
-                log::info!("dictation stopped");
-                s.stop.store(true, Ordering::SeqCst);
-                let _ = s.handle.join();
-            }
+            Err(std::sync::mpsc::TryRecvError::Empty) => {}
+            Err(std::sync::mpsc::TryRecvError::Disconnected) => break,
         }
     }
 
