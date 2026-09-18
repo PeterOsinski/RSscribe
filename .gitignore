@@ -1,1 +1,23 @@
 /target/
+
+# Secrets — never commit. VOICE_PASTE_* config belongs in your shell env.
+.env
+.env.*
+*.env
+
+# macOS
+.DS_Store
+._*
+.Spotlight-V100
+.Trashes
+
+# Rust build artefacts
+target/
+**/*.rs.bk
+*.pdb
+
+# Editor / agent scratch
+.kilo/worktrees/
+.idea/
+.vscode/
+*.swp

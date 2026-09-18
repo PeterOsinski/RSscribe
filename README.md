@@ -26,6 +26,28 @@ double-tap Option  →  mic capture (VAD)  →  whisper-server (Metal)  →  pas
 - **Pick your model** — from `tiny` to `large-v3-turbo`, quantized or full, to
   trade speed against accuracy.
 
+## Privacy
+
+Transcription runs entirely on this machine, and that is a claim you can check
+rather than trust:
+
+- There is **no account, no API key, no telemetry and no subscription**. Audio is
+  captured, transcribed by the local `whisper-server`, and pasted into the focused
+  field — it is never uploaded anywhere.
+- The **only network request** the tool makes is the one-time model download from
+  `huggingface.co/ggerganov/whisper.cpp` — a public URL that needs no credentials —
+  cached under `~/Library/Caches/voice-paste/`.
+- **To verify it yourself:** dictate with Wi-Fi turned off (it keeps working), or
+  run the daemon with Little Snitch or `lsof -i` open and confirm no outbound
+  connection appears while it transcribes. Deletion is a local file operation here,
+  not a promise about someone else's retention policy.
+
+Dictation tends to capture things that never get typed — names, numbers, notes
+about other people. Voice is also biometric data, which is why on-device
+processing matters more here than in most apps. If you need the biggest hosted
+models, a cloud dictation product will beat this one on accuracy; that is a real
+trade-off, and the point of this tool is to be the option that does not make it.
+
 ## Install
 
 Prerequisites: **macOS 14+ on Apple Silicon** (primary target) and
@@ -122,3 +144,15 @@ src/text.rs       transcript cleanup
 src/status.rs     macOS menu-bar status dot (grey idle / red recording)
 site/index.html   minimal landing page (no framework)
 ```
+
+## Licence
+
+MIT — use it, fork it, ship it, sell it. Provided **as is, without warranty of any
+kind**. See [LICENSE](LICENSE) for the full text.
+
+## Contributing
+
+Issues and pull requests are welcome. The tool targets **macOS 14+ on Apple
+Silicon** first: the CLI and transcription paths are portable, while the hotkey and
+paste paths are macOS-specific. Please do not commit `.env` files, credentials or
+`.DS_Store` — the `.gitignore` covers them, and history is forever.
